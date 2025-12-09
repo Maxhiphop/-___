@@ -7,8 +7,7 @@ import os
 import random
 
 # --- КОНФИГУРАЦИЯ ---
-# ВНИМАНИЕ: Если используете replit, рекомендуется использовать os.environ.get()
-API_TOKEN = '8361675894:AAHGtLc7SqcMof2CpyWXkrPf79fKBZ_wj8' # ЗАМЕНИТЕ НА ВАШ РЕАЛЬНЫЙ ТОКЕН!
+API_TOKEN = '8361675894:AAHGtLcSqcMof2CpyWXkrPf79fKBZ_wj8' # ЗАМЕНИТЕ НА ВАШ РЕАЛЬНЫЙ ТОКЕН!
 DATA_FILE = 'users.json'
 PARSE_MODE = 'MarkdownV2'
 
@@ -45,6 +44,8 @@ WIN_REWARD = 50
 bot = telebot.TeleBot(API_TOKEN)
 users = {}
 captcha_storage = {}
+# ❗️ НОВОЕ: Временное хранилище для имен во время регистрации
+temp_storage = {} 
 
 # --- УТИЛИТЫ ---
 def escape_markdown(text):
@@ -91,11 +92,15 @@ def get_pet_status_text(uid):
         return "👋 Привет! Твой питомец еще не создан\\. Нажми /start\\."
 
     u = users[uid]
-    s = u['stats']
-    inv = u['inventory']
+    s = u.get('stats', {}) # Используем .get() на случай, если регистрация не завершена
+    inv = u.get('inventory', {})
     
     pet_name = escape_markdown(u.get('name', 'Питомец'))
     
+    # Проверяем, есть ли stats, чтобы избежать ошибки при незавершенной регистрации
+    if not s:
+        return f"🐱 {pet_name} \\| 💰 {u.get('coins', 0)}\\n\nПродолжи регистрацию, чтобы увидеть его статус\\."
+        
     text = f"🐱 {pet_name} \\| 💰 {u.get('coins',0)}\n"\
            "━━━━━━━━━━━━━━━━━━\n"\
            f"🍖 Голод: {escape_markdown(get_progress_bar(s['hunger']))} {int(s['hunger'])}%\n"\
@@ -121,20 +126,17 @@ def edit_or_send_menu(uid, msg=None, text=None, kb=None):
     
     try:
         if msg:
-            # Попытка редактировать существующее сообщение
-            if msg.caption is not None or photo: # Если это было фото (есть caption) или должно быть фото
+            if msg.caption is not None or photo: 
                 bot.edit_message_caption(text, uid, msg.message_id, reply_markup=kb, parse_mode=PARSE_MODE)
             else:
                 bot.edit_message_text(text, uid, msg.message_id, reply_markup=kb, parse_mode=PARSE_MODE)
         else:
-            # Отправка нового сообщения
             if photo:
                 bot.send_photo(uid, photo, caption=text, reply_markup=kb, parse_mode=PARSE_MODE)
             else:
                 bot.send_message(uid, text, reply_markup=kb, parse_mode=PARSE_MODE)
     except telebot.apihelper.ApiTelegramException as e:
         if "message is not modified" not in str(e):
-             # Если ошибка парсинга или другая критическая, печатаем ошибку
              print(f"Ошибка при обновлении меню для {uid}: {e}")
         pass
 
@@ -180,7 +182,7 @@ def get_use_item_keyboard(cat, inv):
     kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data='menu_main'))
     return kb
 
-# --- ФОНОВЫЙ ПОТОК (для жизнедеятельности питомца) ---
+# --- ФОНОВЫЙ ПОТОК (без изменений) ---
 def live_cycle():
     while True:
         time.sleep(60)
@@ -202,9 +204,11 @@ threading.Thread(target=live_cycle, daemon=True).start()
 @bot.message_handler(commands=['start'])
 def start_game(msg):
     uid = msg.chat.id
-    if uid not in users or 'name' not in users[uid]:
+    if uid not in users or 'name' not in users[uid] or 'stats' not in users[uid]:
         m = bot.send_message(uid, "Привет! Придумай имя питомцу:")
-        users[uid] = {} # Инициализируем для set_name
+        # ❗️ Обновляем users[uid] и temp_storage[uid] для фикса бага
+        users[uid] = {'coins': 100, 'inventory': {'berry':3,'ball':1,'coffee':0}}
+        temp_storage[uid] = {'step': 'name_pending'}
         bot.register_next_step_handler(m, set_name)
     else:
         ensure_user_data(uid)
@@ -213,28 +217,45 @@ def start_game(msg):
 def set_name(msg):
     uid = msg.chat.id
     name = msg.text.strip()
-    users[uid] = {
-        "name": name,
-        "stats": {"hunger":80,"mood":80,"energy":80},
-        "coins": 100,
-        "inventory": {'berry':3,'ball':1,'coffee':0},
-        "last_duel": 0,
-        "photo": None
-    }
-    m = bot.send_message(uid, f"{name} родился! Пришли фото питомца.")
+    
+    # ❗️ Проверяем, что это тот пользователь, который должен был ввести имя
+    if uid not in temp_storage or temp_storage[uid].get('step') != 'name_pending':
+        bot.send_message(uid, "Ошибка регистрации или тайм-аут. Нажми /start еще раз.")
+        return
+
+    # Сохраняем имя во временное хранилище
+    temp_storage[uid]['name'] = name
+    temp_storage[uid]['step'] = 'photo_pending'
+    
+    m = bot.send_message(uid, f"{name} родился! Теперь пришли фото (картинку).")
     bot.register_next_step_handler(m, set_photo)
 
 def set_photo(msg):
     uid = msg.chat.id
+    
+    # ❗️ Проверяем состояние и пользователя
+    if uid not in temp_storage or temp_storage[uid].get('step') != 'photo_pending':
+        bot.send_message(uid, "Ошибка регистрации или тайм-аут. Нажми /start еще раз.")
+        return
+
     if not msg.photo:
-        m = bot.send_message(uid, "Пришли фото питомца!")
+        m = bot.send_message(uid, "Это не фото! Пришли *только* фото питомца\\.", parse_mode=PARSE_MODE)
         bot.register_next_step_handler(m, set_photo)
         return
-    users[uid]['photo'] = msg.photo[-1].file_id
+        
+    # Собираем все финальные данные
+    pet_name = temp_storage.pop(uid)['name'] 
+    
+    users[uid].update({
+        "name": pet_name,
+        "stats": {"hunger":80,"mood":80,"energy":80},
+        "photo": msg.photo[-1].file_id
+    })
+    
     save_data()
     edit_or_send_menu(uid)
 
-# --- УДАЛЕНИЕ ---
+# --- УДАЛЕНИЕ (без изменений) ---
 def process_delete_captcha(msg):
     uid = msg.chat.id
     ans = captcha_storage.pop(uid, None)
@@ -253,15 +274,14 @@ def process_delete_captcha(msg):
         bot.send_message(uid, "❌ Неверный формат! Возврат в меню.")
         edit_or_send_menu(uid)
 
-# --- CALLBACK ---
+# --- CALLBACK (без изменений в логике, кроме вызовов функций) ---
 @bot.callback_query_handler(func=lambda c: True)
 def callback_handler(call):
     uid = call.message.chat.id
     data = call.data
     msg = call.message
     
-    # Защита от незарегистрированных пользователей
-    if uid not in users or 'name' not in users[uid]: 
+    if uid not in users or 'name' not in users[uid] or 'stats' not in users.get(uid, {}): 
         bot.answer_callback_query(call.id, "Сначала создай своего питомца! Нажми /start", show_alert=True)
         return
         
@@ -342,7 +362,7 @@ def callback_handler(call):
             bot.answer_callback_query(call.id,f"Питомец отдыхает. Ждать {int(DUEL_COOLDOWN-(now-u['last_duel']))} сек.", show_alert=True)
             return
             
-        enemies = [k for k in users.keys() if k!=uid and 'name' in users.get(k, {})]
+        enemies = [k for k in users.keys() if k!=uid and 'name' in users.get(k, {}) and 'stats' in users.get(k, {})]
         if not enemies:
             bot.answer_callback_query(call.id,"Нет других игроков :(", show_alert=True)
             return
@@ -371,7 +391,7 @@ def callback_handler(call):
         captcha_storage[uid] = ans
         
         bot.answer_callback_query(call.id,"Запущено удаление. Следующее сообщение.", show_alert=True)
-        msg_delete = bot.send_message(uid,f"⚠️ Ты собираешься удалить {u['name']}.\nРеши капчу: {n1}{op}{n2}=")
+        msg_delete = bot.send_message(uid,f"⚠️ Ты собираешься удалить {u['name']}.\\nРеши капчу: {n1}{op}{n2}=")
         bot.register_next_step_handler(msg_delete, process_delete_captcha)
         try: bot.delete_message(uid, call.message.message_id)
         except: pass
@@ -384,7 +404,7 @@ def callback_handler(call):
         return
 
 if __name__=='__main__':
-    print("Бот v6.0 запущен...")
+    print("Бот v7.0 запущен...")
     try:
         bot.infinity_polling()
     except Exception as e:
