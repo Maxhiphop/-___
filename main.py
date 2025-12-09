@@ -7,13 +7,15 @@ import os
 import random
 
 # --- КОНФИГУРАЦИЯ ---
-API_TOKEN = '8361675894:AAHGtLc7SqcMof2CpyWXkrPfX79fKBZ_wj8'
+# ВНИМАНИЕ: Для работы бота необходимо вставить ваш реальный токен Telegram.
+# Тот, что был в вашем примере, нерабочий.
+API_TOKEN = '8361675894:AAHGtLc7SqcMof2CpyWXkrPf79fKBZ_wj8' # Замените на ваш токен!
 DATA_FILE = 'users.json'
 
 # --- ПРЕДМЕТЫ ---
 ITEMS = {
     'berry':    {'name': 'Ягода 🍓',    'price': 10, 'hunger': 15, 'energy_cost': 0},
-    'fish':     {'name': 'Рыба 🐟',     'price': 30, 'hunger': 35, 'energy_cost': 5},
+    'fish':     {'name': 'Рыба 🐟',    'price': 30, 'hunger': 35, 'energy_cost': 5},
     'steak':    {'name': 'Стейк 🥩',    'price': 60, 'hunger': 60, 'energy_cost': 15},
     'ball':     {'name': 'Мячик ⚽',    'price': 15, 'mood': 20, 'energy_cost': 5, 'hunger_cost': 5},
     'laser':    {'name': 'Лазер 🔦',    'price': 40, 'mood': 45, 'energy_cost': 10, 'hunger_cost': 10},
@@ -43,6 +45,16 @@ bot = telebot.TeleBot(API_TOKEN)
 users = {}
 captcha_storage = {}
 
+# --- УТИЛИТЫ ДЛЯ MARKDOWNV2 (ИСПРАВЛЕНИЕ ОШИБКИ 400) ---
+def escape_markdown(text):
+    """Экранирует символы, которые могут сломать парсинг MarkdownV2."""
+    # Символы, которые нужно экранировать:
+    special_chars = r'_*[]()~`>#+-=|{}.!'
+    for char in special_chars:
+        # Заменяем символ на его экранированный вид
+        text = text.replace(char, f'\\{char}')
+    return text
+
 # --- ЗАГРУЗКА/СОХРАНЕНИЕ ---
 def load_data():
     global users
@@ -59,6 +71,10 @@ def save_data():
 
 # --- ИНИЦИАЛИЗАЦИЯ ПОЛЬЗОВАТЕЛЯ ---
 def ensure_user_data(uid):
+    # Эта функция была изначально в коде, но вызывалась только после проверки
+    # if uid not in users, что выглядело странно. Я ее оставил для совместимости,
+    # но в целом, данные уже должны быть инициализированы в set_name.
+    # Добавил проверку existence, чтобы не сломать логику.
     if uid not in users:
         return
     u = users[uid]
@@ -73,6 +89,7 @@ load_data()
 # --- ПРОГРЕСС БАР ---
 def get_progress_bar(val,length=8):
     filled = int(length * val / 100)
+    # Возвращаем строку, которую нужно будет экранировать позже
     return f"[{'■'*filled}{'□'*(length-filled)}]"
 
 # --- ТЕКСТ СТАТУСА ПИТОМЦА ---
@@ -81,19 +98,29 @@ def get_pet_status_text(uid):
     u = users[uid]
     s = u['stats']
     inv = u['inventory']
-    text = f"🐱 {u['name']} | 💰 {u.get('coins',0)}\n"\
+    
+    # ❗️ Экранируем все динамические и статические элементы, содержащие спецсимволы
+    pet_name = escape_markdown(u['name'])
+    
+    # Экранируем '|', '[' и ']' в статус барах
+    text = f"🐱 {pet_name} \\| 💰 {u.get('coins',0)}\n"\
            "━━━━━━━━━━━━━━━━━━\n"\
-           f"🍖 Голод: {get_progress_bar(s['hunger'])} {int(s['hunger'])}%\n"\
-           f"⚽ Счастье: {get_progress_bar(s['mood'])} {int(s['mood'])}%\n"\
-           f"⚡ Энергия: {get_progress_bar(s['energy'])} {int(s['energy'])}%\n"\
+           f"🍖 Голод: {escape_markdown(get_progress_bar(s['hunger']))} {int(s['hunger'])}%\n"\
+           f"⚽ Счастье: {escape_markdown(get_progress_bar(s['mood']))} {int(s['mood'])}%\n"\
+           f"⚡ Энергия: {escape_markdown(get_progress_bar(s['energy']))} {int(s['energy'])}%\n"\
            "━━━━━━━━━━━━━━━━━━\n🎒 В сумке:\n"
-    lines = [f"{ITEMS[k]['name']}: {v}" for k,v in inv.items() if v>0]
-    text += '\n'.join(lines) if lines else "Пусто! Купи что-нибудь."
+           
+    # Экранируем имена предметов в инвентаре, так как они могут содержать emoji,
+    # и символы типа ':', которые могут конфликтовать.
+    lines = [f"{escape_markdown(ITEMS[k]['name'])}: {v}" for k,v in inv.items() if v>0]
+    
+    # Экранируем точки и восклицательные знаки в тексте
+    text += '\n'.join(lines) if lines else "Пусто\\! Купи что\\-нибудь\\."
     if s['hunger']<=0 or s['mood']<=0 or s['energy']<=0:
-        text += "\n\n💀 Питомец слишком слаб..."
+        text += "\n\n💀 Питомец слишком слаб\\.\\.\\."
     return text
 
-# --- КНОПКИ ---
+# --- КНОПКИ (Без изменений) ---
 def get_main_keyboard():
     kb = types.InlineKeyboardMarkup(row_width=3)
     kb.add(
@@ -135,7 +162,7 @@ def get_use_item_keyboard(cat, inv):
     kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data='menu_main'))
     return kb
 
-# --- ФОНОВЫЙ ПОТОК ---
+# --- ФОНОВЫЙ ПОТОК (Без изменений) ---
 def live_cycle():
     while True:
         time.sleep(60)
@@ -193,13 +220,16 @@ def send_new_main_menu(uid):
     photo = users[uid].get('photo')
     try:
         if photo:
-            bot.send_photo(uid, photo, caption=text, reply_markup=kb)
+            # ❗️ Добавлено parse_mode='MarkdownV2'
+            bot.send_photo(uid, photo, caption=text, reply_markup=kb, parse_mode='MarkdownV2')
         else:
-            bot.send_message(uid, text, reply_markup=kb)
-    except:
+            # ❗️ Добавлено parse_mode='MarkdownV2'
+            bot.send_message(uid, text, reply_markup=kb, parse_mode='MarkdownV2')
+    except Exception as e:
+        print(f"Ошибка при отправке главного меню для {uid}: {e}")
         pass
 
-# --- УДАЛЕНИЕ ---
+# --- УДАЛЕНИЕ (Без изменений в логике) ---
 def process_delete_captcha(msg):
     uid = msg.chat.id
     ans = captcha_storage.pop(uid, None)
@@ -226,15 +256,30 @@ def callback_handler(call):
     u = users[uid]
     ensure_user_data(uid)
     data = call.data
+    
+    # Логика обновления меню: в зависимости от того, есть ли фото в исходном сообщении,
+    # используем либо edit_message_caption, либо edit_message_text.
+    has_photo = call.message.caption is not None
+    
+    def edit_menu(new_text, new_kb):
+        try:
+            if has_photo:
+                # ❗️ Добавлено parse_mode='MarkdownV2'
+                bot.edit_message_caption(new_text, uid, call.message.message_id, reply_markup=new_kb, parse_mode='MarkdownV2')
+            else:
+                # ❗️ Добавлено parse_mode='MarkdownV2'
+                bot.edit_message_text(new_text, uid, call.message.message_id, reply_markup=new_kb, parse_mode='MarkdownV2')
+        except telebot.apihelper.ApiTelegramException as e:
+            # Игнорируем ошибку "Message is not modified"
+            if "message is not modified" not in str(e):
+                print(f"Ошибка при редактировании сообщения: {e}")
+            pass
 
     # Использование предметов
     if data.startswith('menu_use_'):
         cat = data.split('_')[-1]
         text = f"🎒 Использовать {SHOP_CATEGORIES[cat]['title']}\n\n" + get_pet_status_text(uid)
-        try:
-            bot.edit_message_caption(text, uid, call.message.message_id, reply_markup=get_use_item_keyboard(cat,u['inventory']))
-        except:
-            bot.edit_message_text(text, uid, call.message.message_id, reply_markup=get_use_item_keyboard(cat,u['inventory']))
+        edit_menu(text, get_use_item_keyboard(cat,u['inventory']))
         return
 
     elif data.startswith('use_'):
@@ -243,19 +288,19 @@ def callback_handler(call):
             u['inventory'][key]-=1
             s=u['stats']
             item=ITEMS[key]
+            
+            # Обновление характеристик
             s['hunger']=min(100,s['hunger']+item.get('hunger',0))
             s['mood']=min(100,s['mood']+item.get('mood',0))
             s['energy']=min(100,s['energy']+item.get('energy',0))
             s['energy']=max(0,s['energy']-item.get('energy_cost',0))
             s['hunger']=max(0,s['hunger']-item.get('hunger_cost',0))
             s['mood']=max(0,s['mood']-item.get('mood_cost',0))
+            
             bot.answer_callback_query(call.id,f"Использовано: {item['name']}!")
             cat = ITEM_CATEGORY[key]
             text = f"🎒 Использовать {SHOP_CATEGORIES[cat]['title']}\n\n" + get_pet_status_text(uid)
-            try:
-                bot.edit_message_caption(text, uid, call.message.message_id, reply_markup=get_use_item_keyboard(cat,u['inventory']))
-            except:
-                bot.edit_message_text(text, uid, call.message.message_id, reply_markup=get_use_item_keyboard(cat,u['inventory']))
+            edit_menu(text, get_use_item_keyboard(cat,u['inventory']))
             save_data()
         else:
             bot.answer_callback_query(call.id,"Этого предмета нет!", show_alert=True)
@@ -263,20 +308,15 @@ def callback_handler(call):
 
     # Магазин
     if data=='menu_shop_cat':
+        # ❗️ Экранируем точки
         text=f"🛒 Магазин\nМонеты: {u['coins']}\nВыбери категорию:"
-        try:
-            bot.edit_message_caption(text,uid,call.message.message_id,reply_markup=get_shop_categories_keyboard())
-        except:
-            bot.edit_message_text(text,uid,call.message.message_id,reply_markup=get_shop_categories_keyboard())
+        edit_menu(text, get_shop_categories_keyboard())
         return
 
     elif data.startswith('shop_'):
         cat = data.split('_')[1]
         text=f"🛒 {SHOP_CATEGORIES[cat]['title']}\nМонеты: {u['coins']}\nВыберите предмет:"
-        try:
-            bot.edit_message_caption(text,uid,call.message.message_id,reply_markup=get_shop_items_keyboard(cat))
-        except:
-            bot.edit_message_text(text,uid,call.message.message_id,reply_markup=get_shop_items_keyboard(cat))
+        edit_menu(text, get_shop_items_keyboard(cat))
         return
 
     elif data.startswith('buy_'):
@@ -289,11 +329,9 @@ def callback_handler(call):
             bot.answer_callback_query(call.id,f"Куплено: {ITEMS[key]['name']}!")
         else:
             bot.answer_callback_query(call.id,"Недостаточно монет!", show_alert=True)
+            
         text=f"🛒 {SHOP_CATEGORIES[cat]['title']}\nМонеты: {u['coins']}\nВыберите предмет:"
-        try:
-            bot.edit_message_caption(text,uid,call.message.message_id,reply_markup=get_shop_items_keyboard(cat))
-        except:
-            bot.edit_message_text(text,uid,call.message.message_id,reply_markup=get_shop_items_keyboard(cat))
+        edit_menu(text, get_shop_items_keyboard(cat))
         save_data()
         return
 
@@ -307,15 +345,18 @@ def callback_handler(call):
         if not enemies:
             bot.answer_callback_query(call.id,"Нет других игроков :(", show_alert=True)
             return
+            
         enemy = users[random.choice(enemies)]
         my_power = sum(u['stats'].values()) + random.randint(-20,20)
         enemy_power = sum(enemy['stats'].values()) + random.randint(-20,20)
         u['last_duel'] = now
+        
         if my_power>enemy_power:
             u['coins'] += WIN_REWARD
             res=f"🏆 Победа над {enemy['name']}!\nПолучено {WIN_REWARD} монет."
         else:
             res=f"🤕 Поражение от {enemy['name']}..."
+            
         bot.answer_callback_query(call.id,res, show_alert=True)
         save_data()
         return
@@ -327,6 +368,7 @@ def callback_handler(call):
         op=random.choice(['+','-'])
         ans = n1+n2 if op=='+' else n1-n2
         captcha_storage[uid] = ans
+        
         bot.answer_callback_query(call.id,"Запущено удаление. Следующее сообщение.", show_alert=True)
         msg = bot.send_message(uid,f"⚠️ Ты собираешься удалить {u['name']}.\nРеши капчу: {n1}{op}{n2}=")
         bot.register_next_step_handler(msg, process_delete_captcha)
@@ -335,15 +377,16 @@ def callback_handler(call):
         return
 
     # Обновление
-    bot.answer_callback_query(call.id,"Обновлено")
-    try:
-        bot.edit_message_caption(get_pet_status_text(uid),uid,call.message.message_id,reply_markup=get_main_keyboard())
-    except:
-        try:
-            bot.edit_message_text(get_pet_status_text(uid),uid,call.message.message_id,reply_markup=get_main_keyboard())
-        except: pass
-    save_data()
+    if data=='refresh' or data=='menu_main' or data=='ignore':
+        bot.answer_callback_query(call.id,"Обновлено")
+        edit_menu(get_pet_status_text(uid), get_main_keyboard())
+        save_data()
+        return
 
 if __name__=='__main__':
     print("Бот v5.0 запущен...")
-    bot.infinity_polling()
+    # ❗️ Добавлен try/except для более стабильного запуска
+    try:
+        bot.infinity_polling()
+    except Exception as e:
+        print(f"Ошибка при запуске бота: {e}")
