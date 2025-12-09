@@ -7,11 +7,11 @@ import os
 import random
 
 # --- КОНФИГУРАЦИЯ ---
-API_TOKEN = '8361675894:AAHGtLcSqcMof2CpyWXkrPf79fKBZ_wj8' # ЗАМЕНИТЕ НА ВАШ РЕАЛЬНЫЙ ТОКЕН!
+API_TOKEN = '8361675894:AAHGtLc7SqcMof2CpyWXkrPf79fKBZ_wj8' # ЗАМЕНИТЕ НА ВАШ РЕАЛЬНЫЙ ТОКЕН!
 DATA_FILE = 'users.json'
 PARSE_MODE = 'MarkdownV2'
 
-# --- ПРЕДМЕТЫ ---
+# --- ПРЕДМЕТЫ (без изменений) ---
 ITEMS = {
     'berry':    {'name': 'Ягода 🍓',    'price': 10, 'hunger': 15, 'energy_cost': 0},
     'fish':     {'name': 'Рыба 🐟',    'price': 30, 'hunger': 35, 'energy_cost': 5},
@@ -24,7 +24,6 @@ ITEMS = {
     'elixir':   {'name': 'Эликсир ✨',  'price': 150, 'energy': 100, 'hunger': 100, 'mood': 100, 'mood_cost': 0}
 }
 
-# --- КАТЕГОРИИ ---
 SHOP_CATEGORIES = {
     'food':     {'emoji': '🍖', 'title': 'Еда (Голод)'},
     'toys':     {'emoji': '⚽', 'title': 'Игрушки (Счастье)'},
@@ -44,8 +43,7 @@ WIN_REWARD = 50
 bot = telebot.TeleBot(API_TOKEN)
 users = {}
 captcha_storage = {}
-# ❗️ НОВОЕ: Временное хранилище для имен во время регистрации
-temp_storage = {} 
+temp_storage = {} # Используется для FSM (регистрации)
 
 # --- УТИЛИТЫ ---
 def escape_markdown(text):
@@ -92,13 +90,12 @@ def get_pet_status_text(uid):
         return "👋 Привет! Твой питомец еще не создан\\. Нажми /start\\."
 
     u = users[uid]
-    s = u.get('stats', {}) # Используем .get() на случай, если регистрация не завершена
+    s = u.get('stats', {})
     inv = u.get('inventory', {})
     
     pet_name = escape_markdown(u.get('name', 'Питомец'))
     
-    # Проверяем, есть ли stats, чтобы избежать ошибки при незавершенной регистрации
-    if not s:
+    if not s or not u.get('name'):
         return f"🐱 {pet_name} \\| 💰 {u.get('coins', 0)}\\n\nПродолжи регистрацию, чтобы увидеть его статус\\."
         
     text = f"🐱 {pet_name} \\| 💰 {u.get('coins',0)}\n"\
@@ -115,7 +112,7 @@ def get_pet_status_text(uid):
         text += "\n\n💀 Питомец слишком слаб\\.\\.\\. Покорми и поиграй с ним!"
     return text
 
-# --- ФУНКЦИЯ ОТПРАВКИ/РЕДАКТИРОВАНИЯ ---
+# --- ФУНКЦИЯ ОТПРАВКИ/РЕДАКТИРОВАНИЯ (без изменений) ---
 def edit_or_send_menu(uid, msg=None, text=None, kb=None):
     """Универсальная функция для отправки нового или редактирования существующего сообщения."""
     if uid not in users: return
@@ -200,62 +197,68 @@ def live_cycle():
 
 threading.Thread(target=live_cycle, daemon=True).start()
 
-# --- СТАРТ ---
+# --- СТАРТ И FSM РЕГИСТРАЦИЯ ---
 @bot.message_handler(commands=['start'])
 def start_game(msg):
     uid = msg.chat.id
-    if uid not in users or 'name' not in users[uid] or 'stats' not in users[uid]:
-        m = bot.send_message(uid, "Привет! Придумай имя питомцу:")
-        # ❗️ Обновляем users[uid] и temp_storage[uid] для фикса бага
+    # Проверяем на полную регистрацию (наличие имени и stats)
+    if uid not in users or 'name' not in users[uid] or 'stats' not in users.get(uid, {}):
+        bot.send_message(uid, "Привет! Придумай имя питомцу:")
+        # Инициализируем состояние FSM
         users[uid] = {'coins': 100, 'inventory': {'berry':3,'ball':1,'coffee':0}}
         temp_storage[uid] = {'step': 'name_pending'}
-        bot.register_next_step_handler(m, set_name)
     else:
         ensure_user_data(uid)
         edit_or_send_menu(uid)
 
-def set_name(msg):
-    uid = msg.chat.id
-    name = msg.text.strip()
-    
-    # ❗️ Проверяем, что это тот пользователь, который должен был ввести имя
-    if uid not in temp_storage or temp_storage[uid].get('step') != 'name_pending':
-        bot.send_message(uid, "Ошибка регистрации или тайм-аут. Нажми /start еще раз.")
-        return
-
-    # Сохраняем имя во временное хранилище
-    temp_storage[uid]['name'] = name
-    temp_storage[uid]['step'] = 'photo_pending'
-    
-    m = bot.send_message(uid, f"{name} родился! Теперь пришли фото (картинку).")
-    bot.register_next_step_handler(m, set_photo)
-
-def set_photo(msg):
+# ❗️ ЕДИНЫЙ ОБРАБОТЧИК ДЛЯ ТЕКСТА И ФОТО В ПРОЦЕССЕ РЕГИСТРАЦИИ
+@bot.message_handler(content_types=['text', 'photo'])
+def handle_registration_input(msg):
     uid = msg.chat.id
     
-    # ❗️ Проверяем состояние и пользователя
-    if uid not in temp_storage or temp_storage[uid].get('step') != 'photo_pending':
-        bot.send_message(uid, "Ошибка регистрации или тайм-аут. Нажми /start еще раз.")
+    # 1. Проверяем, находится ли пользователь в процессе регистрации
+    if uid not in temp_storage:
+        # Если это просто обычное сообщение и не команда /start, игнорируем его
+        # Если пользователь уже зарегистрирован, то это не должно быть вызвано
+        return 
+
+    current_step = temp_storage[uid].get('step')
+
+    # 2. Обработка ввода ИМЕНИ
+    if current_step == 'name_pending':
+        if msg.text and len(msg.text.strip()) > 0:
+            name = msg.text.strip()
+            # Сохраняем имя и переходим к следующему шагу
+            temp_storage[uid]['name'] = name
+            temp_storage[uid]['step'] = 'photo_pending'
+            bot.send_message(uid, f"{escape_markdown(name)} родился\\! Теперь пришли фото \\(картинку\\)\\.", parse_mode=PARSE_MODE)
+        else:
+            bot.send_message(uid, "Пожалуйста, введи имя текстом\\.", parse_mode=PARSE_MODE)
+
+    # 3. Обработка ввода ФОТО
+    elif current_step == 'photo_pending':
+        if msg.photo:
+            # Финализация регистрации
+            pet_name = temp_storage.pop(uid)['name'] 
+            
+            users[uid].update({
+                "name": pet_name,
+                "stats": {"hunger":80,"mood":80,"energy":80},
+                "photo": msg.photo[-1].file_id
+            })
+            
+            save_data()
+            bot.send_message(uid, f"Питомец **{escape_markdown(pet_name)}** успешно создан\\!", parse_mode=PARSE_MODE)
+            edit_or_send_menu(uid)
+        else:
+            bot.send_message(uid, "Это не фото\\! Пришли *только* фото питомца\\.", parse_mode=PARSE_MODE)
+
+    # 4. Если пользователь ввел что-то, не относящееся к регистрации, и он не зарегистрирован
+    else:
+        # Этот блок обычно не должен срабатывать, если FSM работает корректно
         return
 
-    if not msg.photo:
-        m = bot.send_message(uid, "Это не фото! Пришли *только* фото питомца\\.", parse_mode=PARSE_MODE)
-        bot.register_next_step_handler(m, set_photo)
-        return
-        
-    # Собираем все финальные данные
-    pet_name = temp_storage.pop(uid)['name'] 
-    
-    users[uid].update({
-        "name": pet_name,
-        "stats": {"hunger":80,"mood":80,"energy":80},
-        "photo": msg.photo[-1].file_id
-    })
-    
-    save_data()
-    edit_or_send_menu(uid)
-
-# --- УДАЛЕНИЕ (без изменений) ---
+# --- УДАЛЕНИЕ ---
 def process_delete_captcha(msg):
     uid = msg.chat.id
     ans = captcha_storage.pop(uid, None)
@@ -268,13 +271,15 @@ def process_delete_captcha(msg):
             save_data()
             bot.send_message(uid, "✅ Питомец удален. /start")
         else:
-            bot.send_message(uid, "❌ Неверно! Возврат в меню.")
+            # ❗️ Экранируем текст для Error 400
+            bot.send_message(uid, "❌ Неверно\\! Возврат в меню\\.", parse_mode=PARSE_MODE)
             edit_or_send_menu(uid)
     except:
-        bot.send_message(uid, "❌ Неверный формат! Возврат в меню.")
+        # ❗️ Экранируем текст для Error 400
+        bot.send_message(uid, "❌ Неверный формат\\! Возврат в меню\\.", parse_mode=PARSE_MODE)
         edit_or_send_menu(uid)
 
-# --- CALLBACK (без изменений в логике, кроме вызовов функций) ---
+# --- CALLBACK (без изменений в логике) ---
 @bot.callback_query_handler(func=lambda c: True)
 def callback_handler(call):
     uid = call.message.chat.id
@@ -305,7 +310,6 @@ def callback_handler(call):
             u['inventory'][key]-=1
             s=u['stats']
             
-            # Применение эффектов
             s['hunger']=min(100,s['hunger']+item.get('hunger',0))
             s['mood']=min(100,s['mood']+item.get('mood',0))
             s['energy']=min(100,s['energy']+item.get('energy',0))
@@ -391,7 +395,8 @@ def callback_handler(call):
         captcha_storage[uid] = ans
         
         bot.answer_callback_query(call.id,"Запущено удаление. Следующее сообщение.", show_alert=True)
-        msg_delete = bot.send_message(uid,f"⚠️ Ты собираешься удалить {u['name']}.\\nРеши капчу: {n1}{op}{n2}=")
+        # ❗️ Экранируем текст для Error 400
+        msg_delete = bot.send_message(uid,f"⚠️ Ты собираешься удалить {escape_markdown(u['name'])}.\\nРеши капчу: {n1}{op}{n2}=", parse_mode=PARSE_MODE)
         bot.register_next_step_handler(msg_delete, process_delete_captcha)
         try: bot.delete_message(uid, call.message.message_id)
         except: pass
@@ -404,7 +409,7 @@ def callback_handler(call):
         return
 
 if __name__=='__main__':
-    print("Бот v7.0 запущен...")
+    print("Бот v8.0 запущен...")
     try:
         bot.infinity_polling()
     except Exception as e:
