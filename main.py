@@ -221,82 +221,30 @@ def process_delete_captcha(msg):
         send_new_main_menu(uid)
 
 # --- CALLBACK ---
-@bot.callback_query_handler(func=lambda c:True)
-def callback_handler(call):
-    uid=call.message.chat.id
-    if uid not in users: return
-    u=users[uid]
-    ensure_user_data(uid)
-    data=call.data
-
-    # Использование предметов
-    if data.startswith('menu_use_'):
-        cat=data.split('_')[-1]
-        text=f"🎒 **ИСПОЛЬЗОВАТЬ {SHOP_CATEGORIES[cat]['title'].upper()}**\n\n"
-        try:
-            bot.edit_message_caption(text+get_pet_status_text(uid),uid,call.message.message_id,reply_markup=get_use_item_keyboard(cat,u['inventory']),parse_mode="Markdown")
-        except:
-            bot.edit_message_text(text+get_pet_status_text(uid),uid,call.message.message_id,reply_markup=get_use_item_keyboard(cat,u['inventory']),parse_mode="Markdown")
-        return
-
-    elif data.startswith('use_'):
-        key=data.split('_')[1]
-        if u['inventory'].get(key,0)>0:
-            u['inventory'][key]-=1
-            s=u['stats']
-            item=ITEMS[key]
-            s['hunger']=min(100,s['hunger']+item.get('hunger',0))
-            s['mood']=min(100,s['mood']+item.get('mood',0))
-            s['energy']=min(100,s['energy']+item.get('energy',0))
-            s['energy']=max(0,s['energy']-item.get('energy_cost',0))
-            s['hunger']=max(0,s['hunger']-item.get('hunger_cost',0))
-            s['mood']=max(0,s['mood']-item.get('mood_cost',0))
-            bot.answer_callback_query(call.id,f"Использовано: {item['name']}!")
-            cat=ITEM_CATEGORY[key]
-            try:
-                bot.edit_message_caption(f"🎒 **ИСПОЛЬЗОВАТЬ {SHOP_CATEGORIES[cat]['title'].upper()}**\n\n"+get_pet_status_text(uid),uid,call.message.message_id,reply_markup=get_use_item_keyboard(cat,u['inventory']),parse_mode="Markdown")
-            except:
-                bot.edit_message_text(f"🎒 **ИСПОЛЬЗОВАТЬ {SHOP_CATEGORIES[cat]['title'].upper()}**\n\n"+get_pet_status_text(uid),uid,call.message.message_id,reply_markup=get_use_item_keyboard(cat,u['inventory']),parse_mode="Markdown")
-            save_data()
+# --- Функция для безопасного редактирования сообщений ---
+def safe_edit_message(uid, message_id, text, reply_markup=None):
+    """Редактирует либо caption, либо текст сообщения, в зависимости от наличия фото."""
+    try:
+        photo = users[uid].get('photo')
+        if photo:
+            bot.edit_message_caption(
+                caption=text,
+                chat_id=uid,
+                message_id=message_id,
+                reply_markup=reply_markup,
+                parse_mode="Markdown"
+            )
         else:
-            bot.answer_callback_query(call.id,"Этого предмета нет в инвентаре!",show_alert=True)
-        return
+            bot.edit_message_text(
+                text=text,
+                chat_id=uid,
+                message_id=message_id,
+                reply_markup=reply_markup,
+                parse_mode="Markdown"
+            )
+    except:
+        pass
 
-    # Магазин
-    if data=='menu_shop_cat':
-        text=f"🛒 **МАГАЗИН**\nТвои монеты: 💰 {u['coins']}\n\nВыбери категорию:"
-        try:
-            bot.edit_message_caption(text,uid,call.message.message_id,reply_markup=get_shop_categories_keyboard(),parse_mode="Markdown")
-        except:
-            bot.edit_message_text(text,uid,call.message.message_id,reply_markup=get_shop_categories_keyboard(),parse_mode="Markdown")
-        return
-
-    elif data.startswith('shop_'):
-        cat=data.split('_')[1]
-        text=f"🛒 **{SHOP_CATEGORIES[cat]['title'].upper()}**\nТвои монеты: 💰 {u['coins']}\n\nВыберите предмет:"
-        try:
-            bot.edit_message_caption(text,uid,call.message.message_id,reply_markup=get_shop_items_keyboard(cat),parse_mode="Markdown")
-        except:
-            bot.edit_message_text(text,uid,call.message.message_id,reply_markup=get_shop_items_keyboard(cat),parse_mode="Markdown")
-        return
-
-    elif data.startswith('buy_'):
-        key=data.split('_')[1]
-        price=ITEMS[key]['price']
-        cat=ITEM_CATEGORY[key]
-        if u['coins']>=price:
-            u['coins']-=price
-            u['inventory'][key]=u['inventory'].get(key,0)+1
-            bot.answer_callback_query(call.id,f"Куплено: {ITEMS[key]['name']}!")
-        else:
-            bot.answer_callback_query(call.id,"Недостаточно монет!",show_alert=True)
-        text=f"🛒 **{SHOP_CATEGORIES[cat]['title'].upper()}**\nТвои монеты: 💰 {u['coins']}\n\nВыберите предмет:"
-        try:
-            bot.edit_message_caption(text,uid,call.message.message_id,reply_markup=get_shop_items_keyboard(cat),parse_mode="Markdown")
-        except:
-            bot.edit_message_text(text,uid,call.message.message_id,reply_markup=get_shop_items_keyboard(cat),parse_mode="Markdown")
-        save_data()
-        return
 
     # Дуэль
     if data=='menu_duel':
@@ -347,3 +295,4 @@ def callback_handler(call):
 if __name__=='__main__':
     print("Бот v5.0 запущен...")
     bot.infinity_polling()
+
